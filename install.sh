@@ -9,7 +9,14 @@ if [[ $EUID -ne 0 ]]; then echo "Bitte mit sudo ausführen."; exit 1; fi
 if ! command -v apt-get >/dev/null; then echo "Raspberry Pi OS/Debian erwartet."; exit 1; fi
 
 apt-get update
-apt-get install -y python3 python3-venv python3-pip portaudio19-dev libportaudio2
+# USB audio devices sold as "mini sound cards" normally use the kernel driver
+# snd-usb-audio.  These packages provide ALSA device discovery, mixer profiles
+# and diagnostics; no vendor binary driver is installed.
+apt-get install -y python3 python3-venv python3-pip portaudio19-dev libportaudio2 \
+  libasound2 alsa-utils alsa-ucm-conf usbutils kmod
+modprobe snd-usb-audio || true
+install -d /etc/modules-load.d
+printf '%s\n' 'snd-usb-audio' > /etc/modules-load.d/minigeiger-usb-audio.conf
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd --system --home "$DATA_DIR" --create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
 install -d "$APP_DIR"
@@ -26,3 +33,5 @@ install -m 644 minigeiger.service /etc/systemd/system/minigeiger.service
 systemctl daemon-reload
 systemctl enable --now minigeiger.service
 echo "Fertig. Dashboard: http://$(hostname -I | awk '{print $1}'):8734"
+echo "Erkannte ALSA-Aufnahmegeräte:"
+arecord -l || true

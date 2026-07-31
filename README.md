@@ -26,6 +26,19 @@ sudo bash install.sh
 
 Danach `http://PI-IP:8734` aufrufen, den Eingang wählen und in den Einstellungen die Impulsschwelle anhand der Pegelanzeige einstellen. Der Dienst läuft als eigener Systembenutzer `minigeiger` und startet automatisch.
 
+## USB-Soundkarte wird nicht angezeigt
+
+Der Installer installiert `alsa-utils`, die ALSA-Profile und lädt `snd-usb-audio` – den bereits im Raspberry-Pi-Kernel enthaltenen Treiber für die üblichen class-compliant USB-Soundkarten. Nach einer Neuinstallation oder nach Anstecken der Karte prüfe direkt auf dem Pi:
+
+```bash
+lsusb
+arecord -l
+arecord -L
+sudo systemctl restart minigeiger
+```
+
+`arecord -l` muss die Karte als **card ... device ...** aufführen. Erst dann kann sie im Dashboard erscheinen. Wenn sie dort fehlt, ist kein zusätzliches Herstellerpaket die Lösung: anderes USB-Kabel/anderen Port testen, eine passive USB-Verlängerung vermeiden und bei Pi 3B+ oder mehreren USB-Geräten eine ausreichend versorgte Soundkarte bzw. einen aktiven Hub verwenden. Bei Karten mit Mikrofonbuchse muss der Stecker des SGP001 außerdem am **Mic-In** und nicht an einem reinen Kopfhörer-/Line-Out stecken.
+
 ## MQTT
 
 Standardbasis: `minigeiger`. Beispiele:
