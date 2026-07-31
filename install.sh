@@ -29,6 +29,9 @@ python3 -m venv "$APP_DIR/.venv"
 chown -R root:root "$APP_DIR"
 chmod -R a+rX "$APP_DIR"
 usermod -aG audio "$SERVICE_USER"
+# A former manual `systemctl mask minigeiger` leaves a /dev/null symlink at
+# this path. Remove that mask before installing the actual unit file.
+systemctl unmask minigeiger.service || true
 install -m 644 minigeiger.service /etc/systemd/system/minigeiger.service
 systemctl daemon-reload
 systemctl enable --now minigeiger.service
