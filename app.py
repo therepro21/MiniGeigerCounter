@@ -24,14 +24,14 @@ def db():
 
 class Monitor:
     def __init__(self):
-        self.lock=threading.Lock(); self.pulses=deque(); self.total=0; self.peak=0.; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self._load_total()
+        self.lock=threading.Lock(); self.pulses=deque(); self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self._load_total()
     def _load_total(self):
         with db() as c:
             row=c.execute("SELECT total FROM samples ORDER BY ts DESC LIMIT 1").fetchone(); self.total=row[0] if row else 0
     def callback(self, indata, frames, timing, status):
         now=time.time(); peak=float(np.max(np.abs(indata)))
         with self.lock:
-            self.peak=peak; c=config()
+            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); c=config()
             if peak>=float(c['threshold']) and (now-self.last_pulse)*1000>=float(c['holdoff_ms']):
                 self.last_pulse=now; self.pulses.append(now); self.total+=1
             while self.pulses and self.pulses[0]<now-3600: self.pulses.popleft()
@@ -41,13 +41,23 @@ class Monitor:
         if dev is None: self.device_name="kein Eingang"; return
         try:
             info=sd.query_devices(int(dev), 'input'); self.device_name=info['name']
-            self.stream=sd.InputStream(device=int(dev), channels=1, samplerate=int(c['sample_rate']), callback=self.callback, dtype='float32'); self.stream.start()
+            rates=[]
+            for rate in (c.get('sample_rate', 44100), info['default_samplerate'], 48000, 44100):
+                rate=int(round(float(rate)))
+                if rate > 0 and rate not in rates: rates.append(rate)
+            errors=[]
+            for rate in rates:
+                try:
+                    self.stream=sd.InputStream(device=int(dev), channels=1, samplerate=rate, callback=self.callback, dtype='float32'); self.stream.start(); self.sample_rate=rate; return
+                except Exception as e:
+                    errors.append(str(e)); self.stream=None
+            raise RuntimeError('; '.join(errors))
         except Exception as e: self.device_name=f"Audiofehler: {e}"
     def state(self):
         now=time.time()
         with self.lock:
             m=sum(p>=now-60 for p in self.pulses); smooth=sum(p>=now-300 for p in self.pulses)/5; c=config()
-            return {"cpm":m,"smooth_cpm":smooth,"usvh":m/float(c['counts_per_usvh']),"total_count":self.total,"audio_peak":self.peak,"threshold":c['threshold'],"device_name":self.device_name,"timestamp":now}
+            return {"cpm":m,"smooth_cpm":smooth,"usvh":m/float(c['counts_per_usvh']),"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"timestamp":now}
     def publish(self, s):
         c=config()
         if not c['mqtt_enabled']: return
