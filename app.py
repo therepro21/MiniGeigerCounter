@@ -103,7 +103,10 @@ async def devices():
 async def get_config(): return config()
 @app.put('/api/config')
 async def put_config(update:dict):
-    allowed=set(DEFAULT); c={**config(),**{k:v for k,v in update.items() if k in allowed}}; save_config(c); monitor.mqtt=None; monitor.restart_audio(); return {"ok":True}
+    allowed=set(DEFAULT); old=config(); c={**old,**{k:v for k,v in update.items() if k in allowed}}; save_config(c)
+    if any(old[k] != c[k] for k in ('mqtt_enabled','mqtt_host','mqtt_port','mqtt_username','mqtt_password','mqtt_topic','home_assistant_discovery')): monitor.mqtt=None
+    if any(old[k] != c[k] for k in ('audio_device','sample_rate')): monitor.restart_audio()
+    return {"ok":True}
 @app.get('/api/history')
 async def history(hours:int=24):
     hours=max(1,min(hours,24*90)); since=int(time.time()-hours*3600)
