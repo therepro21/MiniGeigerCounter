@@ -14,7 +14,7 @@ import uvicorn
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
-DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":False,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
+DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":False,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
 RATE_PERIODS = (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("4h", 14400), ("12h", 43200), ("24h", 86400))
 def config():
     if not CONFIG_FILE.exists(): CONFIG_FILE.write_text(json.dumps(DEFAULT, indent=2))
@@ -73,7 +73,7 @@ class Monitor:
                 elif key in historical: rates[key]=historical[key]
                 else: rates[key]=len(self.pulses)/(max(now-self.started_at,1)/60)
             m=rates['1min']; smooth=rates['5min']
-            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"timestamp":now}
+            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
     def publish(self, s):
         c=config()
         if not c['mqtt_enabled']: return
@@ -100,7 +100,10 @@ async def worker():
             try: await ws.send_json(s)
             except Exception: monitor.ws.remove(ws)
         if time.time()-last_store>=60:
-            with db() as c: c.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?,?)',(int(time.time()),s['smooth_cpm'],s['smooth_cpm']/float(config()['counts_per_usvh']),s['total_count']))
+            with db() as c:
+                c.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?,?)',(int(time.time()),s['smooth_cpm'],s['smooth_cpm']/float(config()['counts_per_usvh']),s['total_count']))
+                retention=int(config().get('history_retention_days',0) or 0)
+                if retention>0: c.execute('DELETE FROM samples WHERE ts<?',(int(time.time()-retention*86400),))
             last_store=time.time()
         await asyncio.sleep(2)
 @asynccontextmanager
@@ -135,6 +138,16 @@ async def history(hours:int=24):
     hours=max(1,min(hours,24*90)); since=int(time.time()-hours*3600)
     with db() as c: rows=c.execute('SELECT ts,usvh FROM samples WHERE ts>=? ORDER BY ts',(since,)).fetchall()
     return [{"ts":r[0],"usvh":r[1]} for r in rows]
+@app.delete('/api/history')
+async def delete_history(hours:int=0):
+    """Delete recorded aggregates from the last N hours; 0 clears all history."""
+    if hours<0: raise HTTPException(422, 'hours must not be negative')
+    with db() as c:
+        if hours==0: c.execute('DELETE FROM samples')
+        else: c.execute('DELETE FROM samples WHERE ts>=?',(int(time.time()-hours*3600),))
+        c.commit()
+        c.execute('VACUUM')
+    return {"ok":True,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0}
 @app.websocket('/ws')
 async def websocket(ws:WebSocket):
     await ws.accept(); monitor.ws.append(ws)
