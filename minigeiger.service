@@ -1,0 +1,22 @@
+[Unit]
+Description=MiniGeigerCounter audio radiation monitor
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=minigeiger
+Group=minigeiger
+SupplementaryGroups=audio
+WorkingDirectory=/opt/minigeiger
+Environment=MINIGEIGER_DATA=/var/lib/minigeiger
+ExecStart=/opt/minigeiger/.venv/bin/python /opt/minigeiger/app.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/minigeiger
+
+[Install]
+WantedBy=multi-user.target
