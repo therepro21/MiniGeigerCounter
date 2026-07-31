@@ -7,9 +7,9 @@ Lokaler Raspberry-Pi-Dienst für den **FTLab Smart Geiger Pro SGP001** am Mikrof
 ## Eigenschaften
 
 - Auswahl eines konkreten Audio-Eingangs im Webinterface (mehrere USB-Mikrofone möglich)
-- Pulsdetektion mit Pegel, Holdoff und Schwellwert einstellbar
-- 60-Sekunden-CPM, gleitender CPM und uSv/h (frei kalibrierbarer Faktor)
-- SQLite-Verlauf (5-Minuten-Aggregate, 90 Tage) sowie JSON-API
+- Pulsdetektion mit Pegel, Holdoff und Schwellwert; die Schwelle wird direkt beim Verstellen uebernommen
+- Vergleichsraten fuer 1 min, 5 min, 15 min, 1 h, 4 h, 12 h und 24 h als CPM, CPS und uSv/h
+- SQLite-Verlauf (1-Minuten-Aggregate, 90 Tage) sowie JSON-API
 - MQTT, retained Status und Home-Assistant MQTT Discovery
 - eigenes responsives Dashboard, WebSocket-Liveupdates
 - eigener Dienst auf Port `8734` (konfigurierbar), keine Docker-Abhängigkeit
@@ -65,6 +65,8 @@ Die Konfiguration und Daten liegen in `/var/lib/minigeiger/`. Im Dashboard lasse
 ## Kalibrierung
 
 `uSv/h = CPM / counts_per_usvh`. Der Standardwert `11.26` ist bewusst nur ein Ausgangswert und darf nicht als Herstellerkalibrierung verstanden werden. Trage einen für deinen Sensor und Aufbau ermittelten Faktor ein. Die Firmware ignoriert Pulse innerhalb der Holdoff-Zeit, damit ein einzelner Klick nicht mehrfach gezählt wird.
+
+Die Roentgenanzeige im Dashboard ist aus dem jeweiligen uSv/h-Wert abgeleitet (als uR/h) und dient ebenfalls nur der Orientierung.
 
 ## Entwicklung
 
