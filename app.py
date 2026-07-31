@@ -14,11 +14,15 @@ import uvicorn
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
-DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":11.26,"click_sound_enabled":False,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
+DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":False,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
 RATE_PERIODS = (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("4h", 14400), ("12h", 43200), ("24h", 86400))
 def config():
     if not CONFIG_FILE.exists(): CONFIG_FILE.write_text(json.dumps(DEFAULT, indent=2))
-    return {**DEFAULT, **json.loads(CONFIG_FILE.read_text())}
+    stored=json.loads(CONFIG_FILE.read_text())
+    # Migrate the former placeholder calibration to the supplied reference.
+    if stored.get('counts_per_usvh') == 11.26:
+        stored['counts_per_usvh']=DEFAULT['counts_per_usvh']; stored['cps_per_usvh']=DEFAULT['cps_per_usvh']; CONFIG_FILE.write_text(json.dumps({**DEFAULT,**stored}, indent=2))
+    return {**DEFAULT, **stored}
 def save_config(c): CONFIG_FILE.write_text(json.dumps({**DEFAULT,**c}, indent=2))
 def db():
     con=sqlite3.connect(DB_FILE); con.execute("CREATE TABLE IF NOT EXISTS samples (ts INTEGER PRIMARY KEY, cpm REAL, usvh REAL, total INTEGER)"); return con
@@ -69,7 +73,7 @@ class Monitor:
                 elif key in historical: rates[key]=historical[key]
                 else: rates[key]=len(self.pulses)/(max(now-self.started_at,1)/60)
             m=rates['1min']; smooth=rates['5min']
-            return {"cpm":m,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"timestamp":now}
+            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"timestamp":now}
     def publish(self, s):
         c=config()
         if not c['mqtt_enabled']: return
@@ -116,6 +120,8 @@ async def get_config(): return config()
 @app.put('/api/config')
 async def put_config(update:dict):
     allowed=set(DEFAULT); old=config(); c={**old,**{k:v for k,v in update.items() if k in allowed}}
+    if 'counts_per_usvh' in update: c['cps_per_usvh']=float(c['counts_per_usvh'])/60
+    elif 'cps_per_usvh' in update: c['counts_per_usvh']=float(c['cps_per_usvh'])*60
     if 'threshold' in update:
         try: c['threshold']=float(c['threshold'])
         except (TypeError, ValueError): raise HTTPException(422, 'Ungültige Impulsschwelle')
