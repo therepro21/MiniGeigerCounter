@@ -14,7 +14,7 @@ import uvicorn
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
-DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.16,"holdoff_ms":80,"counts_per_usvh":11.26,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
+DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.16,"holdoff_ms":80,"counts_per_usvh":11.26,"click_sound_enabled":False,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
 def config():
     if not CONFIG_FILE.exists(): CONFIG_FILE.write_text(json.dumps(DEFAULT, indent=2))
     return {**DEFAULT, **json.loads(CONFIG_FILE.read_text())}
