@@ -11,10 +11,13 @@ from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase.pdfmetrics import stringWidth
-from reportlab.pdfgen import canvas
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    REPORTLAB_AVAILABLE=True
+except ImportError:
+    REPORTLAB_AVAILABLE=False
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
@@ -161,6 +164,7 @@ async def history(hours:int=24):
     return [{"ts":r[0],"usvh":r[1]} for r in rows]
 @app.get('/api/export.pdf')
 async def export_pdf(hours:int=24):
+    if not REPORTLAB_AVAILABLE: raise HTTPException(503, 'PDF export requires reportlab; run the installer again')
     hours=max(1,min(hours,24*3650)); since=int(time.time()-hours*3600)
     with db() as c: rows=c.execute('SELECT ts,cpm,usvh,total FROM samples WHERE ts>=? ORDER BY ts',(since,)).fetchall()
     out=io.BytesIO(); page=canvas.Canvas(out,pagesize=A4); width,height=A4
