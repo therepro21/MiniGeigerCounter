@@ -87,6 +87,8 @@ class Monitor:
                 elif key in historical: rates[key]=historical[key]
                 else: rates[key]=len(self.pulses)/(max(now-self.started_at,1)/60)
             m=rates['1min']; smooth=rates['5min']
+            # Deliberately un-smoothed: pulses detected during the rolling last second.
+            current_cps=sum(p >= now-1 for p in self.pulses)
             if now-self.last_level_state>=1:
                 level_ranges={}
                 for label,seconds in (("5s",5),("30s",30),("1min",60),("5min",300)):
@@ -96,7 +98,7 @@ class Monitor:
                     values=[(low,high) for ts,low,high in self.level_seconds if ts>=now-seconds]
                     level_ranges[label]={"min":min((v[0] for v in values),default=0),"max":max((v[1] for v in values),default=0)}
                 self.level_ranges=level_ranges; self.last_level_state=now
-            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"level_ranges":self.level_ranges,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
+            return {"cpm":m,"cps":m/60,"current_cps":current_cps,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"level_ranges":self.level_ranges,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
     def publish(self, s):
         c=config()
         if not c['mqtt_enabled']: return
@@ -133,7 +135,7 @@ async def worker():
 @asynccontextmanager
 async def lifespan(app):
     monitor.restart_audio(); task=asyncio.create_task(worker()); yield; task.cancel()
-app=FastAPI(title='MiniGeigerCounter',version='2.0',lifespan=lifespan)
+app=FastAPI(title='MiniGeigerCounter',version='2.5',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 @app.get('/')
 async def home(): return FileResponse(Path(__file__).parent/'static'/'index.html')
@@ -168,8 +170,13 @@ async def export_pdf(hours:int=24):
     hours=max(1,min(hours,24*3650)); since=int(time.time()-hours*3600)
     with db() as c: rows=c.execute('SELECT ts,cpm,usvh,total FROM samples WHERE ts>=? ORDER BY ts',(since,)).fetchall()
     out=io.BytesIO(); page=canvas.Canvas(out,pagesize=A4); width,height=A4
-    page.setFillColor(colors.HexColor('#0b4f9c')); page.roundRect(36,height-70,38,38,8,fill=1,stroke=0)
-    page.setFillColor(colors.white); page.circle(55,height-51,7,fill=1,stroke=0)
+    # Vector counterpart of the browser logo: handheld meter, pulse display, radiation waves.
+    blue=colors.HexColor('#0866b6'); logo_x,logo_y=36,height-70
+    page.setFillColor(blue); page.roundRect(logo_x,logo_y,25,38,5,fill=1,stroke=0)
+    page.setFillColor(colors.white); page.roundRect(logo_x+4,logo_y+17,17,13,2,fill=1,stroke=0)
+    page.setStrokeColor(blue); page.setLineWidth(1.5); page.line(logo_x+6,logo_y+23,logo_x+9,logo_y+23); page.line(logo_x+9,logo_y+23,logo_x+11,logo_y+27); page.line(logo_x+11,logo_y+27,logo_x+14,logo_y+20); page.line(logo_x+14,logo_y+20,logo_x+16,logo_y+24); page.line(logo_x+16,logo_y+24,logo_x+19,logo_y+24)
+    page.setFillColor(colors.white); page.rect(logo_x+7,logo_y+5,11,2,fill=1,stroke=0)
+    page.setStrokeColor(blue); page.setLineWidth(1.8); page.arc(logo_x+22,logo_y+11,logo_x+35,logo_y+29,300,120); page.arc(logo_x+25,logo_y+7,logo_x+42,logo_y+33,300,120)
     page.setFillColor(colors.HexColor('#102a43')); page.setFont('Helvetica-Bold',16); page.drawString(84,height-48,'MiniGeigerCounter')
     page.setFont('Helvetica',9); page.setFillColor(colors.HexColor('#526f82')); page.drawString(84,height-62,f'Bericht - letzte {hours} Stunden - erstellt {time.strftime("%d.%m.%Y %H:%M")}')
     page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,height-82,width-36,height-82)
