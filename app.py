@@ -14,7 +14,7 @@ import uvicorn
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
-DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":False,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
+DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":True,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
 RATE_PERIODS = (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("4h", 14400), ("12h", 43200), ("24h", 86400))
 def config():
     if not CONFIG_FILE.exists(): CONFIG_FILE.write_text(json.dumps(DEFAULT, indent=2))
@@ -29,14 +29,15 @@ def db():
 
 class Monitor:
     def __init__(self):
-        self.lock=threading.Lock(); self.pulses=deque(); self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total()
+        self.lock=threading.Lock(); self.pulses=deque(); self.levels=deque(); self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total()
     def _load_total(self):
         with db() as c:
             row=c.execute("SELECT total FROM samples ORDER BY ts DESC LIMIT 1").fetchone(); self.total=row[0] if row else 0
     def callback(self, indata, frames, timing, status):
         now=time.time(); peak=float(np.max(np.abs(indata)))
         with self.lock:
-            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); c=config()
+            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); self.levels.append((now,peak)); c=config()
+            while self.levels and self.levels[0][0]<now-300: self.levels.popleft()
             if peak>=float(c['threshold']) and (now-self.last_pulse)*1000>=float(c['holdoff_ms']):
                 self.last_pulse=now; self.pulses.append(now); self.total+=1
             while self.pulses and self.pulses[0]<now-86400: self.pulses.popleft()
@@ -73,7 +74,11 @@ class Monitor:
                 elif key in historical: rates[key]=historical[key]
                 else: rates[key]=len(self.pulses)/(max(now-self.started_at,1)/60)
             m=rates['1min']; smooth=rates['5min']
-            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
+            level_ranges={}
+            for label,seconds in (("5s",5),("30s",30),("1min",60),("5min",300)):
+                values=[value for ts,value in self.levels if ts>=now-seconds]
+                level_ranges[label]={"min":min(values) if values else 0,"max":max(values) if values else 0}
+            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"level_ranges":level_ranges,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
     def publish(self, s):
         c=config()
         if not c['mqtt_enabled']: return
@@ -93,9 +98,10 @@ class Monitor:
 
 monitor=Monitor()
 async def worker():
-    last_store=0
+    last_store=last_publish=0
     while True:
-        s=monitor.state(); monitor.publish(s)
+        s=monitor.state()
+        if time.time()-last_publish>=2: monitor.publish(s); last_publish=time.time()
         for ws in monitor.ws[:]:
             try: await ws.send_json(s)
             except Exception: monitor.ws.remove(ws)
@@ -105,11 +111,11 @@ async def worker():
                 retention=int(config().get('history_retention_days',0) or 0)
                 if retention>0: c.execute('DELETE FROM samples WHERE ts<?',(int(time.time()-retention*86400),))
             last_store=time.time()
-        await asyncio.sleep(2)
+        await asyncio.sleep(.1)
 @asynccontextmanager
 async def lifespan(app):
     monitor.restart_audio(); task=asyncio.create_task(worker()); yield; task.cancel()
-app=FastAPI(title='MiniGeigerCounter',lifespan=lifespan)
+app=FastAPI(title='MiniGeigerCounter',version='2.0',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 @app.get('/')
 async def home(): return FileResponse(Path(__file__).parent/'static'/'index.html')

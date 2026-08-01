@@ -5,6 +5,7 @@
   "holdoff_ms": 80,
   "counts_per_usvh": 8014.285714,
   "cps_per_usvh": 133.571429,
+  "click_sound_enabled": true,
   "history_retention_days": 0,
   "mqtt_enabled": false,
   "mqtt_host": "127.0.0.1",
