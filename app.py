@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """MiniGeigerCounter - audio pulse acquisition, web UI and MQTT."""
-import asyncio, json, os, sqlite3, threading, time
+import asyncio, io, json, os, sqlite3, threading, time
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,9 +8,13 @@ import numpy as np
 import sounddevice as sd
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import uvicorn
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
@@ -31,15 +35,19 @@ def db():
 
 class Monitor:
     def __init__(self):
-        self.lock=threading.Lock(); self.pulses=deque(); self.levels=deque(); self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total()
+        self.lock=threading.Lock(); self.pulses=deque(); self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total()
     def _load_total(self):
         with db() as c:
             row=c.execute("SELECT total FROM samples ORDER BY ts DESC LIMIT 1").fetchone(); self.total=row[0] if row else 0
     def callback(self, indata, frames, timing, status):
         now=time.time(); peak=float(np.max(np.abs(indata)))
         with self.lock:
-            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); self.levels.append((now,peak)); c=config()
+            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); self.levels.append((now,peak)); c=config(); second=int(now)
+            if self.level_seconds and self.level_seconds[-1][0]==second:
+                _,low,high=self.level_seconds[-1]; self.level_seconds[-1]=(second,min(low,peak),max(high,peak))
+            else: self.level_seconds.append((second,peak,peak))
             while self.levels and self.levels[0][0]<now-300: self.levels.popleft()
+            while self.level_seconds and self.level_seconds[0][0]<second-86400: self.level_seconds.popleft()
             if peak>=float(c['threshold']) and (now-self.last_pulse)*1000>=float(c['holdoff_ms']):
                 self.last_pulse=now; self.pulses.append(now); self.total+=1
             while self.pulses and self.pulses[0]<now-86400: self.pulses.popleft()
@@ -76,11 +84,16 @@ class Monitor:
                 elif key in historical: rates[key]=historical[key]
                 else: rates[key]=len(self.pulses)/(max(now-self.started_at,1)/60)
             m=rates['1min']; smooth=rates['5min']
-            level_ranges={}
-            for label,seconds in (("5s",5),("30s",30),("1min",60),("5min",300)):
-                values=[value for ts,value in self.levels if ts>=now-seconds]
-                level_ranges[label]={"min":min(values) if values else 0,"max":max(values) if values else 0}
-            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"level_ranges":level_ranges,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
+            if now-self.last_level_state>=1:
+                level_ranges={}
+                for label,seconds in (("5s",5),("30s",30),("1min",60),("5min",300)):
+                    values=[value for ts,value in self.levels if ts>=now-seconds]
+                    level_ranges[label]={"min":min(values) if values else 0,"max":max(values) if values else 0}
+                for label,seconds in (("15min",900),("1h",3600),("4h",14400),("12h",43200),("24h",86400)):
+                    values=[(low,high) for ts,low,high in self.level_seconds if ts>=now-seconds]
+                    level_ranges[label]={"min":min((v[0] for v in values),default=0),"max":max((v[1] for v in values),default=0)}
+                self.level_ranges=level_ranges; self.last_level_state=now
+            return {"cpm":m,"cps":m/60,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"level_ranges":self.level_ranges,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
     def publish(self, s):
         c=config()
         if not c['mqtt_enabled']: return
@@ -146,6 +159,27 @@ async def history(hours:int=24):
     hours=max(1,min(hours,24*90)); since=int(time.time()-hours*3600)
     with db() as c: rows=c.execute('SELECT ts,usvh FROM samples WHERE ts>=? ORDER BY ts',(since,)).fetchall()
     return [{"ts":r[0],"usvh":r[1]} for r in rows]
+@app.get('/api/export.pdf')
+async def export_pdf(hours:int=24):
+    hours=max(1,min(hours,24*3650)); since=int(time.time()-hours*3600)
+    with db() as c: rows=c.execute('SELECT ts,cpm,usvh,total FROM samples WHERE ts>=? ORDER BY ts',(since,)).fetchall()
+    out=io.BytesIO(); page=canvas.Canvas(out,pagesize=A4); width,height=A4
+    page.setFillColor(colors.HexColor('#0b4f9c')); page.roundRect(36,height-70,38,38,8,fill=1,stroke=0)
+    page.setFillColor(colors.white); page.circle(55,height-51,7,fill=1,stroke=0)
+    page.setFillColor(colors.HexColor('#102a43')); page.setFont('Helvetica-Bold',16); page.drawString(84,height-48,'MiniGeigerCounter')
+    page.setFont('Helvetica',9); page.setFillColor(colors.HexColor('#526f82')); page.drawString(84,height-62,f'Bericht - letzte {hours} Stunden - erstellt {time.strftime("%d.%m.%Y %H:%M")}')
+    page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,height-82,width-36,height-82)
+    page.setFillColor(colors.HexColor('#102a43')); page.setFont('Helvetica-Bold',11); page.drawString(36,height-108,'Messverlauf')
+    y=height-130; page.setFont('Helvetica-Bold',8)
+    for x,label in ((36,'Zeit'),(175,'CPM'),(270,'uSv/h'),(370,'Impulse gesamt')): page.drawString(x,y,label)
+    page.setFont('Helvetica',8); y-=13
+    step=max(1,len(rows)//42)
+    for ts,cpm,usvh,total in rows[::step]:
+        if y<65: page.showPage(); y=height-55; page.setFont('Helvetica',8)
+        page.setFillColor(colors.HexColor('#102a43')); page.drawString(36,y,time.strftime('%d.%m.%Y %H:%M',time.localtime(ts)))
+        page.drawRightString(235,y,f'{cpm:.2f}'.replace('.',',')); page.drawRightString(340,y,f'{usvh:.4f}'.replace('.',',')); page.drawRightString(470,y,str(total)); y-=12
+    page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,42,width-36,42); page.setFillColor(colors.HexColor('#526f82')); page.setFont('Helvetica',8); page.drawString(36,28,'Copyright by Michael P. Thiess - MiniGeigerCounter v2.5'); page.drawRightString(width-36,28,'github.com/therepro21/MiniGeigerCounter')
+    page.save(); return Response(content=out.getvalue(),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="MiniGeigerCounter_{hours}h.pdf"'})
 @app.delete('/api/history')
 async def delete_history(hours:int=0):
     """Delete recorded aggregates from the last N hours; 0 clears all history."""

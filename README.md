@@ -1,5 +1,7 @@
 # MiniGeigerCounter
 
+Version 2.5
+
 Lokaler Raspberry-Pi-Dienst für den **FTLab Smart Geiger Pro SGP001** am Mikrofoneingang einer USB-Soundkarte. Er zählt Audioimpulse, speichert aktuelle und historische Messwerte, stellt sie im mobilen Web-Dashboard dar und sendet sie per MQTT inklusive Home-Assistant-Discovery.
 
 > Hinweis: Das SGP001 ist ein indikatives Messgerät. Der Dosiskonversionsfaktor ist je Aufbau zu kalibrieren; die Anzeige ist kein Ersatz für ein geeichtes Dosimeter.
@@ -12,6 +14,7 @@ Lokaler Raspberry-Pi-Dienst für den **FTLab Smart Geiger Pro SGP001** am Mikrof
 - SQLite-Verlauf (1-Minuten-Aggregate, 90 Tage) sowie JSON-API
 - MQTT, retained Status und Home-Assistant MQTT Discovery
 - eigenes responsives Dashboard, WebSocket-Liveupdates
+- PDF-Export fuer 24 Stunden, 7 oder 30 Tage; Datenaufbewahrung und Verlauf-Reset im Dashboard
 - eigener Dienst auf Port `8734` (konfigurierbar), keine Docker-Abhängigkeit
 
 ## Installation
