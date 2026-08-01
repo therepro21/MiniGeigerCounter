@@ -22,6 +22,8 @@ def config():
     # Migrate the former placeholder calibration to the supplied reference.
     if stored.get('counts_per_usvh') == 11.26:
         stored['counts_per_usvh']=DEFAULT['counts_per_usvh']; stored['cps_per_usvh']=DEFAULT['cps_per_usvh']; CONFIG_FILE.write_text(json.dumps({**DEFAULT,**stored}, indent=2))
+    if '_click_default_v2' not in stored:
+        stored['click_sound_enabled']=True; stored['_click_default_v2']=True; CONFIG_FILE.write_text(json.dumps({**DEFAULT,**stored}, indent=2))
     return {**DEFAULT, **stored}
 def save_config(c): CONFIG_FILE.write_text(json.dumps({**DEFAULT,**c}, indent=2))
 def db():
