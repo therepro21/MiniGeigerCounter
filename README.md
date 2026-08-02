@@ -1,4 +1,4 @@
-# MiniGeigerCounter v2.5
+# MiniGeigerCounter v3.0
 
 Lokaler, ressourcenschonender Raspberry-Pi-Dienst für Geigerzähler. Das Dashboard, MQTT und Home-Assistant-Discovery funktionieren ohne Cloud und teilen sich den Pi konfliktarm mit anderen Diensten.
 
@@ -144,6 +144,18 @@ Der DFRobot-Sensor arbeitet mit 3,3–5 V und zieht seinen digitalen Ausgang bei
 `Aktuell CPS` zählt ausschließlich die Impulse der letzten Sekunde. CPM, Dosis, MQTT und Verlauf werden aus effizienten Zeitfenstern erzeugt; lange Historien bremsen die Erfassung nicht.
 
 Die Umrechnung ist immer nur so gut wie Zählrohr, Geometrie und Kalibrierung. In **Einstellungen** kann ein Referenzgerät eingetragen werden: Referenz-CPS und zugehörige µSv/h ergeben automatisch den Faktor für CPM und CPS. Beim DFRobot-SEN0463 nennt der Hersteller 153,8 CPM/(µSv/h); RadiationD ist abhängig vom konkret verbauten Rohr und muss geprüft beziehungsweise kalibriert werden.
+
+Version 3.0 bietet zusätzlich eine Röhren-Vorauswahl. Die Werte sind typische Startwerte für Gamma-Kalibrierungen und werden beim Auswählen in die beiden Kalibrierfelder übernommen; erst **Speichern** aktiviert sie.
+
+| Vorauswahl | CPM pro µSv/h | Hinweis |
+|---|---:|---|
+| M4011 / DFRobot Gravity | 153,8 | Herstellerangabe für SEN0463 |
+| J305/J305β (RadiationD) | 123,15 | typischer J305-Wert |
+| SBM-20 / STS-5 | 175,44 | typischer Gamma-Startwert |
+| LND 712 / 7121 | 123,15 | Cs-137-Referenz, abhängig von Geometrie und Energie |
+| SGP001 | 8.014,285714 | bestehende Projektkalibrierung, nicht allgemeingültig |
+
+Diese Auswahl ersetzt kein Referenzgerät oder eine professionelle Kalibrierung. Insbesondere Alpha-/Beta-Quellen, Fensterröhren, Gehäuse und die Energie des Isotops verändern die Anzeige deutlich.
 
 ## MQTT und Home Assistant
 

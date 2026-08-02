@@ -182,7 +182,7 @@ async def worker():
 @asynccontextmanager
 async def lifespan(app):
     monitor.restart_input(); task=asyncio.create_task(worker()); yield; task.cancel(); monitor.stop_input()
-app=FastAPI(title='MiniGeigerCounter',version='2.5',lifespan=lifespan)
+app=FastAPI(title='MiniGeigerCounter',version='3.0',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 @app.get('/')
 async def home(): return FileResponse(Path(__file__).parent/'static'/'index.html')
@@ -237,7 +237,7 @@ async def export_pdf(hours:int=24):
         if y<65: page.showPage(); y=height-55; page.setFont('Helvetica',8)
         page.setFillColor(colors.HexColor('#102a43')); page.drawString(36,y,time.strftime('%d.%m.%Y %H:%M',time.localtime(ts)))
         page.drawRightString(235,y,f'{cpm:.2f}'.replace('.',',')); page.drawRightString(340,y,f'{usvh:.4f}'.replace('.',',')); page.drawRightString(470,y,str(total)); y-=12
-    page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,42,width-36,42); page.setFillColor(colors.HexColor('#526f82')); page.setFont('Helvetica',8); page.drawString(36,28,'Copyright by Michael P. Thiess - MiniGeigerCounter v2.5'); page.drawRightString(width-36,28,'github.com/therepro21/MiniGeigerCounter')
+    page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,42,width-36,42); page.setFillColor(colors.HexColor('#526f82')); page.setFont('Helvetica',8); page.drawString(36,28,'Copyright by Michael P. Thiess - MiniGeigerCounter v3.0'); page.drawRightString(width-36,28,'github.com/therepro21/MiniGeigerCounter')
     page.save(); return Response(content=out.getvalue(),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="MiniGeigerCounter_{hours}h.pdf"'})
 @app.delete('/api/history')
 async def delete_history(hours:int=0):
