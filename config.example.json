@@ -1,6 +1,9 @@
 {
+  "counter_type": "sgp001_audio",
   "audio_device": null,
   "sample_rate": 44100,
+  "gpio_pin": 17,
+  "gpio_active_low": true,
   "threshold": 0.0071,
   "holdoff_ms": 80,
   "counts_per_usvh": 8014.285714,

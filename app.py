@@ -7,6 +7,11 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import paho.mqtt.client as mqtt
+try:
+    from gpiozero import DigitalInputDevice
+    GPIO_AVAILABLE=True
+except ImportError:
+    GPIO_AVAILABLE=False
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -21,7 +26,7 @@ except ImportError:
 
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
-DEFAULT = {"audio_device":None,"sample_rate":44100,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":True,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
+DEFAULT = {"counter_type":"sgp001_audio","audio_device":None,"sample_rate":44100,"gpio_pin":17,"gpio_active_low":True,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":True,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
 RATE_PERIODS = (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("4h", 14400), ("12h", 43200), ("24h", 86400))
 def config():
     if not CONFIG_FILE.exists(): CONFIG_FILE.write_text(json.dumps(DEFAULT, indent=2))
@@ -38,7 +43,7 @@ def db():
 
 class Monitor:
     def __init__(self):
-        self.lock=threading.Lock(); self.cfg=config(); self.pulses=deque(); self.period_buckets={key:deque() for key,_ in RATE_PERIODS}; self.period_counts={key:0 for key,_ in RATE_PERIODS}; self.rates_cache={key:0. for key,_ in RATE_PERIODS}; self.last_rate_state=0.; self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.last_long_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total(); self._load_history_baselines()
+        self.lock=threading.Lock(); self.cfg=config(); self.pulses=deque(); self.period_buckets={key:deque() for key,_ in RATE_PERIODS}; self.period_counts={key:0 for key,_ in RATE_PERIODS}; self.rates_cache={key:0. for key,_ in RATE_PERIODS}; self.last_rate_state=0.; self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.last_long_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.gpio_input=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total(); self._load_history_baselines()
     def _load_total(self):
         with db() as c:
             row=c.execute("SELECT total FROM samples ORDER BY ts DESC LIMIT 1").fetchone(); self.total=row[0] if row else 0
@@ -51,6 +56,16 @@ class Monitor:
                 if row: self.history_baselines[key]=row
     def apply_config(self, c):
         with self.lock: self.cfg=c
+    def _register_pulse(self, now, c):
+        if (now-self.last_pulse)*1000<float(c['holdoff_ms']): return
+        self.last_pulse=now; self.pulses.append(now); self.total+=1; second=int(now)
+        for key,_ in RATE_PERIODS:
+            bucket=self.period_buckets[key]
+            if bucket and bucket[-1][0]==second: bucket[-1]=(second,bucket[-1][1]+1)
+            else: bucket.append((second,1))
+            self.period_counts[key]+=1
+    def _gpio_pulse(self):
+        with self.lock: self._register_pulse(time.time(),self.cfg)
     def callback(self, indata, frames, timing, status):
         now=time.time(); peak=float(np.max(np.abs(indata)))
         with self.lock:
@@ -60,17 +75,19 @@ class Monitor:
             else: self.level_seconds.append((second,peak,peak))
             while self.levels and self.levels[0][0]<now-300: self.levels.popleft()
             while self.level_seconds and self.level_seconds[0][0]<second-86400: self.level_seconds.popleft()
-            if peak>=float(c['threshold']) and (now-self.last_pulse)*1000>=float(c['holdoff_ms']):
-                self.last_pulse=now; self.pulses.append(now); self.total+=1
-                for key,_ in RATE_PERIODS:
-                    bucket=self.period_buckets[key]
-                    if bucket and bucket[-1][0]==second: bucket[-1]=(second,bucket[-1][1]+1)
-                    else: bucket.append((second,1))
-                    self.period_counts[key]+=1
+            if peak>=float(c['threshold']): self._register_pulse(now,c)
             # Raw timestamps exist only for the exact, un-smoothed CPS display.
             while self.pulses and self.pulses[0]<now-1: self.pulses.popleft()
+    def stop_input(self):
+        if self.stream:
+            self.stream.stop(); self.stream.close(); self.stream=None
+        if self.gpio_input:
+            self.gpio_input.close(); self.gpio_input=None
+    def restart_input(self):
+        self.stop_input(); c=self.cfg
+        if c['counter_type'].endswith('_gpio'): return self.restart_gpio()
+        return self.restart_audio()
     def restart_audio(self):
-        if self.stream: self.stream.stop(); self.stream.close(); self.stream=None
         c=self.cfg; dev=c['audio_device']
         if dev is None: self.device_name="kein Eingang"; return
         try:
@@ -87,6 +104,16 @@ class Monitor:
                     errors.append(str(e)); self.stream=None
             raise RuntimeError('; '.join(errors))
         except Exception as e: self.device_name=f"Audiofehler: {e}"
+    def restart_gpio(self):
+        c=self.cfg
+        if not GPIO_AVAILABLE:
+            self.device_name="GPIO Fehler: gpiozero fehlt - Installer erneut ausführen"; return
+        try:
+            pin=int(c['gpio_pin']); self.gpio_input=DigitalInputDevice(pin,pull_up=False)
+            if c.get('gpio_active_low',True): self.gpio_input.when_deactivated=self._gpio_pulse; edge="fallende Flanke"
+            else: self.gpio_input.when_activated=self._gpio_pulse; edge="steigende Flanke"
+            self.sample_rate=0; self.device_name=f"GPIO BCM {pin} ({edge})"
+        except Exception as e: self.device_name=f"GPIO Fehler: {e}"
     def state(self):
         now=time.time()
         with self.lock:
@@ -154,7 +181,7 @@ async def worker():
         await asyncio.sleep(.1)
 @asynccontextmanager
 async def lifespan(app):
-    monitor.restart_audio(); task=asyncio.create_task(worker()); yield; task.cancel()
+    monitor.restart_input(); task=asyncio.create_task(worker()); yield; task.cancel(); monitor.stop_input()
 app=FastAPI(title='MiniGeigerCounter',version='2.5',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 @app.get('/')
@@ -178,7 +205,7 @@ async def put_config(update:dict):
     save_config(c)
     monitor.apply_config(c)
     if any(old[k] != c[k] for k in ('mqtt_enabled','mqtt_host','mqtt_port','mqtt_username','mqtt_password','mqtt_topic','home_assistant_discovery')): monitor.mqtt=None
-    if any(old[k] != c[k] for k in ('audio_device','sample_rate')): monitor.restart_audio()
+    if any(old[k] != c[k] for k in ('counter_type','audio_device','sample_rate','gpio_pin','gpio_active_low')): monitor.restart_input()
     return {"ok":True}
 @app.get('/api/history')
 async def history(hours:int=24):

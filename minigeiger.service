@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=minigeiger
 Group=minigeiger
-SupplementaryGroups=audio
+SupplementaryGroups=audio gpio
 WorkingDirectory=/opt/minigeiger
 Environment=MINIGEIGER_DATA=/var/lib/minigeiger
 ExecStart=/opt/minigeiger/.venv/bin/python /opt/minigeiger/app.py

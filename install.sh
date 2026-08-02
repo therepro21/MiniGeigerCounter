@@ -12,7 +12,7 @@ apt-get update
 # USB audio devices sold as "mini sound cards" normally use the kernel driver
 # snd-usb-audio.  These packages provide ALSA device discovery, mixer profiles
 # and diagnostics; no vendor binary driver is installed.
-apt-get install -y python3 python3-venv python3-pip portaudio19-dev libportaudio2 \
+apt-get install -y python3 python3-venv python3-pip python3-gpiozero python3-lgpio portaudio19-dev libportaudio2 \
   libasound2 alsa-utils alsa-ucm-conf usbutils kmod
 modprobe snd-usb-audio || true
 install -d /etc/modules-load.d
@@ -23,12 +23,14 @@ install -d "$APP_DIR"
 cp app.py requirements.txt "$APP_DIR/"
 cp -r static "$APP_DIR/"
 [[ -f "$DATA_DIR/config.json" ]] || install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 640 config.example.json "$DATA_DIR/config.json"
-python3 -m venv "$APP_DIR/.venv"
+python3 -m venv --system-site-packages "$APP_DIR/.venv"
+sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' "$APP_DIR/.venv/pyvenv.cfg"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip wheel
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 chown -R root:root "$APP_DIR"
 chmod -R a+rX "$APP_DIR"
-usermod -aG audio "$SERVICE_USER"
+getent group gpio >/dev/null || groupadd --system gpio
+usermod -aG audio,gpio "$SERVICE_USER"
 # A former manual `systemctl mask minigeiger` leaves a /dev/null symlink at
 # this path. Remove that mask before installing the actual unit file.
 systemctl unmask minigeiger.service || true
