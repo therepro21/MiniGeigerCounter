@@ -38,22 +38,81 @@ Smart Geiger Pro SGP001              Raspberry Pi
 
 Den SGP001 am **Mikrofoneingang**, nicht am Kopfhörer-/Line-Out der Soundkarte anschließen. In den Einstellungen `FTLab Smart Geiger Pro SGP001 (Audio)` und danach den richtigen Audio-Eingang wählen. Bei mehreren Karten helfen `arecord -l` und die Pegelanzeige beim Zuordnen.
 
-### 2A. RadiationD v1.1 (CAJOE) - digitaler GPIO-Impuls
+### 2A. RadiationD v1.1 (CAJOE) - digitaler GPIO-Impuls mit AZDelivery-Pegelwandler
+
+Der [AZDelivery 4-Kanal-Pegelwandler 5 V ↔ 3,3 V](https://www.az-delivery.de/products/4-kanal-pegelwandler-3-3v-5v) ist hierfür geeignet. Es wird nur **ein** Kanal benötigt, zum Beispiel `HV1`/`LV1`. Die Pins heißen auf baugleichen Modulen meist `HV`, `LV`, `GND`, `HV1…HV4` und `LV1…LV4`.
 
 ```text
-RadiationD P3*                    5-V → 3,3-V Pegelwandler           Raspberry Pi 40-Pin
-┌───────────────┐                 ┌────────────────────────┐         ┌─────────────────┐
-│ +5V ──────────┼─────────────────┼────────────────────────┼────────►│ Pin 2 oder 4: 5V│
-│ GND ──────────┼─────────────────┼───────────────┬────────┼────────►│ Pin 6: GND      │
-│ CPM / VIN OUT ┼────────────────►│ IN        OUT ├────────┼────────►│ Pin 11: BCM 17  │
-└───────────────┘                 └────────────────────────┘         └─────────────────┘
+                    Datenleitung (ein Kanal)
+RadiationD*                                         AZDelivery                 Raspberry Pi
+┌───────────────┐       ┌──────────────────┐       ┌──────────────────────┐    ┌─────────────────┐
+│ CPM / VIN OUT ├──────►│ HV1              │       │                      │    │                 │
+│               │       │                  │       │ LV1 ─────────────────┼───►│ Pin 11 / BCM 17 │
+└───────────────┘       └──────────────────┘       └──────────────────────┘    └─────────────────┘
+
+                    Versorgung und gemeinsame Masse
+Raspberry Pi                         AZDelivery                         RadiationD
+┌──────────────────┐                ┌──────────────────────┐          ┌───────────────┐
+│ Pin 2 oder 4: 5 V├───────────────►│ HV                   │          │ +5V           │
+│                  ├─────────────────────────────────────────────────►│ +5V           │
+│ Pin 1: 3,3 V ────┼───────────────►│ LV                   │          │               │
+│ Pin 6: GND ──────┼───────────────►│ GND                  ├─────────►│ GND           │
+└──────────────────┘                └──────────────────────┘          └───────────────┘
 ```
 
-`*` Je nach Boardrevision ist die Bezeichnung des Impulsausgangs abweichend; bei verbreiteten RadiationD-v1.1-Platinen ist `VIN` der Impulsausgang. Vor dem Anschluss die Platinenbeschriftung und das Schaltbild der eigenen Revision prüfen.
+| Verbindung | Von | Nach |
+|---|---|---|
+| 5-V-Logikversorgung | Pi Pin 2 **oder** 4 | Pegelwandler `HV` |
+| 3,3-V-Logikversorgung | Pi Pin 1 | Pegelwandler `LV` |
+| Gemeinsame Masse | Pi Pin 6 | Pegelwandler `GND` und RadiationD `GND` |
+| RadiationD-Versorgung | Pi Pin 2 **oder** 4 | RadiationD `+5V` |
+| Impuls, 5-V-Seite | RadiationD `CPM OUT`/`VIN OUT` | Pegelwandler `HV1` |
+| Impuls, 3,3-V-Seite | Pegelwandler `LV1` | Pi Pin 11 / BCM 17 |
 
-Als Pegelwandler eignet sich ein bidirektionaler Logic-Level-Converter. Alternativ darf ein korrekt berechneter Spannungsteiler verwendet werden, beispielsweise **10 kΩ vom RadiationD-Ausgang zum GPIO und 20 kΩ vom GPIO nach GND** (5 V werden auf etwa 3,3 V geteilt). In Einstellungen `RadiationD v1.1 (GPIO-Impuls)`, BCM 17 und `Puls ist aktiv LOW: Ja` wählen. Die übliche Schaltung zählt die fallende Flanke.
+`*` Die Bezeichnung des Impulsausgangs unterscheidet sich je Boardrevision. Bei verbreiteten RadiationD-v1.1-Platinen ist der mit `VIN` beschriftete Pin der Impulsausgang; Beschriftung und Schaltbild der eigenen Platine haben Vorrang.
 
-Ein separates, geregeltes 5-V-Netzteil darf statt Pi-Pin 2/4 verwendet werden. Dann muss die Masse (GND) mit dem Pi verbunden werden. Keine Versorgung an GPIO-Pins anschließen.
+Für **Raspberry Pi 3B+, Pi 4 und Pi 5 ist die Belegung identisch**, da alle den 40-poligen Header verwenden. BCM 17 ist physischer Pin 11; Pin 1 ist 3,3 V, Pin 2/4 sind 5 V und Pin 6 ist GND. Der Pi-GPIO erhält ausschließlich das Signal von `LV1` - **nie** RadiationD `OUT` oder `HV1` direkt mit dem Pi verbinden.
+
+Die 5-V-Pins 2 und 4 sind keine schaltbaren GPIOs, sondern direkt mit der 5-V-Versorgungsschiene des Pi verbunden. Sie können RadiationD versorgen, wenn der Pi über sein geeignetes Netzteil betrieben wird. Keine fremde 5-V-Quelle parallel auf Pin 2/4 einspeisen, wenn der Pi bereits über Micro-USB oder USB-C versorgt wird.
+
+In Einstellungen `RadiationD v1.1 (GPIO-Impuls)`, BCM 17 und `Puls ist aktiv LOW: Ja` wählen. Die verbreitete RadiationD-Schaltung zählt die fallende Flanke.
+
+#### Alternative: separates 5-V-Netzteil für RadiationD
+
+Bei einem schwachen oder bereits stark belasteten Pi-Netzteil ist ein eigenes, geregeltes 5-V-Netzteil für RadiationD sinnvoll:
+
+```text
+Externes 5-V-Netzteil + ──► RadiationD +5V und Pegelwandler HV
+Externes 5-V-Netzteil - ──► RadiationD GND, Pegelwandler GND und Pi Pin 6 (GND)
+Pi Pin 1 (3,3 V) ─────────► Pegelwandler LV
+Pegelwandler LV1 ─────────► Pi Pin 11 / BCM 17
+RadiationD CPM/VIN OUT ───► Pegelwandler HV1
+```
+
+Das externe Netzteil **nicht** zusätzlich auf Pi-Pin 2/4 einspeisen, solange der Pi bereits über USB-C/Micro-USB versorgt wird. Die gemeinsame Masse ist dagegen zwingend nötig, damit der Pegelwandler ein eindeutiges Signal erhält.
+
+#### Alternative: 5 V über USB-Port des Pi
+
+Auch ein USB-Port des Pi kann RadiationD versorgen. Dazu ein USB-A-auf-offenes-Kabel oder eine USB-Breakout-Buchse verwenden - **nur Rot (+5 V) und Schwarz (GND)** anschließen, Datenadern Grün/Weiß unverbunden und isoliert lassen:
+
+```text
+Pi USB-A-Port / USB-Breakout        RadiationD + Pegelwandler
+Rot (+5 V) ───────────────────────► RadiationD +5V und AZDelivery HV
+Schwarz (GND) ────────────────────► RadiationD GND und AZDelivery GND
+Pi Pin 1 (3,3 V) ─────────────────► AZDelivery LV
+RadiationD CPM/VIN OUT ───────────► AZDelivery HV1
+AZDelivery LV1 ───────────────────► Pi Pin 11 / BCM 17
+```
+
+Das ist elektrisch derselbe 5-V-Kreis wie die Header-Pins. Deshalb zählt die **gesamte** USB-Last: Pi 3B+ und Pi 4 stellen zusammen maximal 1,2 A an den USB-Ports bereit. Beim Pi 5 sind es 600 mA mit einem 3-A-Netzteil und bis zu 1,6 A mit einem erkannten 5-A-/27-W-Netzteil. Sind bereits USB-Soundkarten, SSDs oder andere Geräte angeschlossen, ist für RadiationD ein separates geregeltes 5-V-Netzteil oder ein aktiver USB-Hub die robustere Wahl.
+
+#### Anschlussreihenfolge
+
+1. Pi ausschalten; zunächst nur die Leitungen `HV`, `LV` und `GND` des Pegelwandlers prüfen.
+2. RadiationD mit 5 V und GND verbinden.
+3. Erst danach `CPM/VIN OUT → HV1` sowie `LV1 → BCM 17` verbinden.
+4. Pi starten, im Dashboard das RadiationD-GPIO-Profil wählen und speichern.
+5. Im Dashboard muss als Eingang `GPIO BCM 17 (fallende Flanke)` erscheinen. Bei abweichendem Pin diesen als BCM-Nummer eintragen, nicht als physische Pinnummer.
 
 ### 2B. RadiationD v1.1 - Lautsprecher-Signal per Audio
 
