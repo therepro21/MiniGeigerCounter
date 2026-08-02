@@ -38,14 +38,23 @@ def db():
 
 class Monitor:
     def __init__(self):
-        self.lock=threading.Lock(); self.pulses=deque(); self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total()
+        self.lock=threading.Lock(); self.cfg=config(); self.pulses=deque(); self.period_buckets={key:deque() for key,_ in RATE_PERIODS}; self.period_counts={key:0 for key,_ in RATE_PERIODS}; self.rates_cache={key:0. for key,_ in RATE_PERIODS}; self.last_rate_state=0.; self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.last_long_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total(); self._load_history_baselines()
     def _load_total(self):
         with db() as c:
             row=c.execute("SELECT total FROM samples ORDER BY ts DESC LIMIT 1").fetchone(); self.total=row[0] if row else 0
+    def _load_history_baselines(self):
+        """Load long-window baselines once; never query SQLite from the live path."""
+        now=int(self.started_at); self.history_baselines={}
+        with db() as c:
+            for key,seconds in RATE_PERIODS:
+                row=c.execute('SELECT ts,total FROM samples WHERE ts<=? ORDER BY ts DESC LIMIT 1',(now-seconds,)).fetchone()
+                if row: self.history_baselines[key]=row
+    def apply_config(self, c):
+        with self.lock: self.cfg=c
     def callback(self, indata, frames, timing, status):
         now=time.time(); peak=float(np.max(np.abs(indata)))
         with self.lock:
-            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); self.levels.append((now,peak)); c=config(); second=int(now)
+            self.peak=peak; self.rms=float(np.sqrt(np.mean(np.square(indata)))); self.levels.append((now,peak)); c=self.cfg; second=int(now)
             if self.level_seconds and self.level_seconds[-1][0]==second:
                 _,low,high=self.level_seconds[-1]; self.level_seconds[-1]=(second,min(low,peak),max(high,peak))
             else: self.level_seconds.append((second,peak,peak))
@@ -53,10 +62,16 @@ class Monitor:
             while self.level_seconds and self.level_seconds[0][0]<second-86400: self.level_seconds.popleft()
             if peak>=float(c['threshold']) and (now-self.last_pulse)*1000>=float(c['holdoff_ms']):
                 self.last_pulse=now; self.pulses.append(now); self.total+=1
-            while self.pulses and self.pulses[0]<now-86400: self.pulses.popleft()
+                for key,_ in RATE_PERIODS:
+                    bucket=self.period_buckets[key]
+                    if bucket and bucket[-1][0]==second: bucket[-1]=(second,bucket[-1][1]+1)
+                    else: bucket.append((second,1))
+                    self.period_counts[key]+=1
+            # Raw timestamps exist only for the exact, un-smoothed CPS display.
+            while self.pulses and self.pulses[0]<now-1: self.pulses.popleft()
     def restart_audio(self):
         if self.stream: self.stream.stop(); self.stream.close(); self.stream=None
-        c=config(); dev=c['audio_device']
+        c=self.cfg; dev=c['audio_device']
         if dev is None: self.device_name="kein Eingang"; return
         try:
             info=sd.query_devices(int(dev), 'input'); self.device_name=info['name']
@@ -75,18 +90,19 @@ class Monitor:
     def state(self):
         now=time.time()
         with self.lock:
-            c=config(); rates={}; missing_history=[(key,seconds) for key,seconds in RATE_PERIODS if now-self.started_at<seconds]
-            historical={}
-            if missing_history:
-                with db() as con:
-                    for key,seconds in missing_history:
-                        row=con.execute('SELECT ts,total FROM samples WHERE ts<=? ORDER BY ts DESC LIMIT 1',(int(now-seconds),)).fetchone()
-                        if row: historical[key]=max(0,self.total-row[1])/max((now-row[0])/60,1/60)
-            for key, seconds in RATE_PERIODS:
-                if now-self.started_at>=seconds: rates[key]=sum(p>=now-seconds for p in self.pulses)/(seconds/60)
-                elif key in historical: rates[key]=historical[key]
-                else: rates[key]=len(self.pulses)/(max(now-self.started_at,1)/60)
-            m=rates['1min']; smooth=rates['5min']
+            c=self.cfg; second=int(now)
+            if second!=self.last_rate_state:
+                elapsed=now-self.started_at
+                for key,seconds in RATE_PERIODS:
+                    bucket=self.period_buckets[key]; cutoff=second-seconds
+                    while bucket and bucket[0][0]<cutoff: self.period_counts[key]-=bucket.popleft()[1]
+                    baseline=self.history_baselines.get(key)
+                    if elapsed<seconds and baseline:
+                        self.rates_cache[key]=max(0,self.total-baseline[1])/max((now-baseline[0])/60,1/60)
+                    else:
+                        self.rates_cache[key]=self.period_counts[key]/(min(elapsed,seconds)/60)
+                self.last_rate_state=second
+            rates=self.rates_cache; m=rates['1min']; smooth=rates['5min']
             # Deliberately un-smoothed: pulses detected during the rolling last second.
             current_cps=sum(p >= now-1 for p in self.pulses)
             if now-self.last_level_state>=1:
@@ -94,13 +110,17 @@ class Monitor:
                 for label,seconds in (("5s",5),("30s",30),("1min",60),("5min",300)):
                     values=[value for ts,value in self.levels if ts>=now-seconds]
                     level_ranges[label]={"min":min(values) if values else 0,"max":max(values) if values else 0}
+                self.level_ranges.update(level_ranges); self.last_level_state=now
+            # Long audio ranges do not need a 10 Hz refresh; update them every 10 seconds.
+            if now-self.last_long_level_state>=10:
+                level_ranges={}
                 for label,seconds in (("15min",900),("1h",3600),("4h",14400),("12h",43200),("24h",86400)):
                     values=[(low,high) for ts,low,high in self.level_seconds if ts>=now-seconds]
                     level_ranges[label]={"min":min((v[0] for v in values),default=0),"max":max((v[1] for v in values),default=0)}
-                self.level_ranges=level_ranges; self.last_level_state=now
+                self.level_ranges.update(level_ranges); self.last_long_level_state=now
             return {"cpm":m,"cps":m/60,"current_cps":current_cps,"smooth_cpm":smooth,"rates_cpm":rates,"usvh":m/float(c['counts_per_usvh']),"counts_per_usvh":c['counts_per_usvh'],"cps_per_usvh":c['cps_per_usvh'],"total_count":self.total,"audio_peak":self.peak,"audio_rms":self.rms,"level_ranges":self.level_ranges,"sample_rate":self.sample_rate,"threshold":c['threshold'],"device_name":self.device_name,"database_bytes":DB_FILE.stat().st_size if DB_FILE.exists() else 0,"timestamp":now}
     def publish(self, s):
-        c=config()
+        c=self.cfg
         if not c['mqtt_enabled']: return
         try:
             if not self.mqtt:
@@ -127,8 +147,8 @@ async def worker():
             except Exception: monitor.ws.remove(ws)
         if time.time()-last_store>=60:
             with db() as c:
-                c.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?,?)',(int(time.time()),s['smooth_cpm'],s['smooth_cpm']/float(config()['counts_per_usvh']),s['total_count']))
-                retention=int(config().get('history_retention_days',0) or 0)
+                c.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?,?)',(int(time.time()),s['smooth_cpm'],s['smooth_cpm']/float(monitor.cfg['counts_per_usvh']),s['total_count']))
+                retention=int(monitor.cfg.get('history_retention_days',0) or 0)
                 if retention>0: c.execute('DELETE FROM samples WHERE ts<?',(int(time.time()-retention*86400),))
             last_store=time.time()
         await asyncio.sleep(.1)
@@ -156,13 +176,14 @@ async def put_config(update:dict):
         except (TypeError, ValueError): raise HTTPException(422, 'Ungültige Impulsschwelle')
         if not 0 < c['threshold'] <= .01: raise HTTPException(422, 'Die Impulsschwelle muss zwischen 0 und 0,01 liegen')
     save_config(c)
+    monitor.apply_config(c)
     if any(old[k] != c[k] for k in ('mqtt_enabled','mqtt_host','mqtt_port','mqtt_username','mqtt_password','mqtt_topic','home_assistant_discovery')): monitor.mqtt=None
     if any(old[k] != c[k] for k in ('audio_device','sample_rate')): monitor.restart_audio()
     return {"ok":True}
 @app.get('/api/history')
 async def history(hours:int=24):
-    hours=max(1,min(hours,24*90)); since=int(time.time()-hours*3600)
-    with db() as c: rows=c.execute('SELECT ts,usvh FROM samples WHERE ts>=? ORDER BY ts',(since,)).fetchall()
+    hours=max(1,min(hours,24*90)); since=int(time.time()-hours*3600); bucket=60 if hours<=24 else 300 if hours<=24*7 else 900
+    with db() as c: rows=c.execute('SELECT (ts / ?) * ? AS bucket, AVG(usvh) FROM samples WHERE ts>=? GROUP BY bucket ORDER BY bucket',(bucket,bucket,since)).fetchall()
     return [{"ts":r[0],"usvh":r[1]} for r in rows]
 @app.get('/api/export.pdf')
 async def export_pdf(hours:int=24):
