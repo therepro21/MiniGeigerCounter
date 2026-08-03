@@ -43,7 +43,7 @@ def db():
 
 class Monitor:
     def __init__(self):
-        self.lock=threading.Lock(); self.cfg=config(); self.pulses=deque(); self.period_buckets={key:deque() for key,_ in RATE_PERIODS}; self.period_counts={key:0 for key,_ in RATE_PERIODS}; self.rates_cache={key:0. for key,_ in RATE_PERIODS}; self.last_rate_state=0.; self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.last_long_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.gpio_input=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total(); self._load_history_baselines()
+        self.lock=threading.Lock(); self.cfg=config(); self.config_dirty=False; self.pulses=deque(); self.period_buckets={key:deque() for key,_ in RATE_PERIODS}; self.period_counts={key:0 for key,_ in RATE_PERIODS}; self.rates_cache={key:0. for key,_ in RATE_PERIODS}; self.last_rate_state=0.; self.levels=deque(); self.level_seconds=deque(); self.level_ranges={}; self.last_level_state=0.; self.last_long_level_state=0.; self.total=0; self.peak=0.; self.rms=0.; self.sample_rate=0; self.last_pulse=0.; self.stream=None; self.gpio_input=None; self.device_name="kein Eingang"; self.ws=[]; self.mqtt=None; self.started_at=time.time(); self._load_total(); self._load_history_baselines()
     def _load_total(self):
         with db() as c:
             row=c.execute("SELECT total FROM samples ORDER BY ts DESC LIMIT 1").fetchone(); self.total=row[0] if row else 0
@@ -55,7 +55,14 @@ class Monitor:
                 row=c.execute('SELECT ts,total FROM samples WHERE ts<=? ORDER BY ts DESC LIMIT 1',(now-seconds,)).fetchone()
                 if row: self.history_baselines[key]=row
     def apply_config(self, c):
-        with self.lock: self.cfg=c
+        with self.lock:
+            self.cfg=c; self.config_dirty=True
+    def flush_config(self):
+        """Persist at most once per aggregation cycle; live acquisition uses RAM."""
+        with self.lock:
+            if not self.config_dirty: return
+            pending=dict(self.cfg); self.config_dirty=False
+        save_config(pending)
     def _register_pulse(self, now, c):
         if (now-self.last_pulse)*1000<float(c['holdoff_ms']): return
         self.last_pulse=now; self.pulses.append(now); self.total+=1; second=int(now)
@@ -173,6 +180,7 @@ async def worker():
             try: await ws.send_json(s)
             except Exception: monitor.ws.remove(ws)
         if time.time()-last_store>=60:
+            monitor.flush_config()
             with db() as c:
                 c.execute('INSERT OR REPLACE INTO samples VALUES(?,?,?,?)',(int(time.time()),s['smooth_cpm'],s['smooth_cpm']/float(monitor.cfg['counts_per_usvh']),s['total_count']))
                 retention=int(monitor.cfg.get('history_retention_days',0) or 0)
@@ -181,7 +189,7 @@ async def worker():
         await asyncio.sleep(.1)
 @asynccontextmanager
 async def lifespan(app):
-    monitor.restart_input(); task=asyncio.create_task(worker()); yield; task.cancel(); monitor.stop_input()
+    monitor.restart_input(); task=asyncio.create_task(worker()); yield; task.cancel(); monitor.flush_config(); monitor.stop_input()
 app=FastAPI(title='MiniGeigerCounter',version='3.0',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 @app.get('/')
@@ -192,17 +200,19 @@ async def state(): return monitor.state()
 async def devices():
     return [{"id":i,"name":d['name']} for i,d in enumerate(sd.query_devices()) if d['max_input_channels']>0]
 @app.get('/api/config')
-async def get_config(): return config()
+async def get_config():
+    with monitor.lock: return dict(monitor.cfg)
 @app.put('/api/config')
 async def put_config(update:dict):
-    allowed=set(DEFAULT); old=config(); c={**old,**{k:v for k,v in update.items() if k in allowed}}
+    allowed=set(DEFAULT)
+    with monitor.lock: old=dict(monitor.cfg)
+    c={**old,**{k:v for k,v in update.items() if k in allowed}}
     if 'counts_per_usvh' in update: c['cps_per_usvh']=float(c['counts_per_usvh'])/60
     elif 'cps_per_usvh' in update: c['counts_per_usvh']=float(c['cps_per_usvh'])*60
     if 'threshold' in update:
         try: c['threshold']=float(c['threshold'])
         except (TypeError, ValueError): raise HTTPException(422, 'Ungültige Impulsschwelle')
         if not 0 < c['threshold'] <= .01: raise HTTPException(422, 'Die Impulsschwelle muss zwischen 0 und 0,01 liegen')
-    save_config(c)
     monitor.apply_config(c)
     if any(old[k] != c[k] for k in ('mqtt_enabled','mqtt_host','mqtt_port','mqtt_username','mqtt_password','mqtt_topic','home_assistant_discovery')): monitor.mqtt=None
     if any(old[k] != c[k] for k in ('counter_type','audio_device','sample_rate','gpio_pin','gpio_active_low')): monitor.restart_input()

@@ -141,7 +141,7 @@ Der DFRobot-Sensor arbeitet mit 3,3–5 V und zieht seinen digitalen Ausgang bei
 
 ## Kalibrierung und Werte
 
-`Aktuell CPS` zählt ausschließlich die Impulse der letzten Sekunde. CPM, Dosis, MQTT und Verlauf werden aus effizienten Zeitfenstern erzeugt; lange Historien bremsen die Erfassung nicht.
+`Aktuell CPS` zählt ausschließlich die Impulse der letzten Sekunde. CPM, Dosis, MQTT und Verlauf werden aus effizienten Zeitfenstern erzeugt; lange Historien bremsen die Erfassung nicht. Puls-, Pegel- und Zwischenwerte liegen ausschließlich im RAM. SQLite-Verlauf und geänderte Einstellungen werden gebündelt höchstens einmal pro Minute auf die microSD geschrieben.
 
 Die Umrechnung ist immer nur so gut wie Zählrohr, Geometrie und Kalibrierung. In **Einstellungen** kann ein Referenzgerät eingetragen werden: Referenz-CPS und zugehörige µSv/h ergeben automatisch den Faktor für CPM und CPS. Beim DFRobot-SEN0463 nennt der Hersteller 153,8 CPM/(µSv/h); RadiationD ist abhängig vom konkret verbauten Rohr und muss geprüft beziehungsweise kalibriert werden.
 
