@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Root-owned updater installed by install.sh. It accepts no arguments.
+set -euo pipefail
+LOG=/var/log/minigeiger-update.log
+exec >>"$LOG" 2>&1
+echo "[$(date -Is)] MiniGeigerCounter update started"
+source /etc/minigeiger/updater.conf
+[[ -d "$REPO_DIR/.git" ]] || { echo "Repository not found: $REPO_DIR"; exit 1; }
+# Never overwrite experimental local modifications made by the operator.
+git -C "$REPO_DIR" diff --quiet
+git -C "$REPO_DIR" diff --cached --quiet
+git -C "$REPO_DIR" fetch origin "$BRANCH"
+git -C "$REPO_DIR" pull --ff-only origin "$BRANCH"
+bash "$REPO_DIR/install.sh"
+echo "[$(date -Is)] MiniGeigerCounter update complete"

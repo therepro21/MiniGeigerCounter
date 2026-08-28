@@ -13,7 +13,8 @@ Environment=MINIGEIGER_DATA=/var/lib/minigeiger
 ExecStart=/opt/minigeiger/.venv/bin/python /opt/minigeiger/app.py
 Restart=always
 RestartSec=5
-NoNewPrivileges=true
+# Required only for the narrowly whitelisted, root-owned web updater.
+NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/var/lib/minigeiger

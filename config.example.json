@@ -11,11 +11,13 @@
   "click_sound_enabled": true,
   "history_retention_days": 0,
   "mqtt_enabled": false,
-  "mqtt_host": "127.0.0.1",
+  "mqtt_host": "192.168.0.31",
   "mqtt_port": 1883,
-  "mqtt_username": "",
+  "mqtt_username": "minigeigercounter",
   "mqtt_password": "",
   "mqtt_topic": "minigeiger",
+  "mqtt_discovery_prefix": "homeassistant",
   "home_assistant_discovery": true,
+  "update_token": "",
   "web_port": 8734
 }

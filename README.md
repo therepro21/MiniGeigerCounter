@@ -1,4 +1,4 @@
-# MiniGeigerCounter v3.0
+# MiniGeigerCounter v3.1
 
 Lokaler, ressourcenschonender Raspberry-Pi-Dienst für Geigerzähler. Das Dashboard, MQTT und Home-Assistant-Discovery funktionieren ohne Cloud und teilen sich den Pi konfliktarm mit anderen Diensten.
 
@@ -159,16 +159,41 @@ Diese Auswahl ersetzt kein Referenzgerät oder eine professionelle Kalibrierung.
 
 ## MQTT und Home Assistant
 
-Standardbasis: `minigeiger`.
+Die Einstellungen entsprechen der vorhandenen Mosquitto-/Home-Assistant-Anbindung des PV Optimizers bzw. NoiseMeter Pro: Broker-Host, Port, Benutzername, Passwort, Basistopic, Discovery-Präfix und Discovery-Schalter. Standardbasis ist `minigeiger`, das Discovery-Präfix `homeassistant`.
+
+| Einstellung | Beispiel / Zweck |
+|---|---|
+| MQTT Host / Port | `192.168.0.31` / `1883` (lokaler Mosquitto) |
+| MQTT Benutzername / Passwort | eigener Mosquitto-Benutzer; Passwort leer lassen, um das gespeicherte Passwort beizubehalten |
+| MQTT Topic | `minigeiger` – muss im Broker eindeutig sein |
+| Home-Assistant Discovery-Präfix | üblicherweise `homeassistant` |
+| Home-Assistant-Discovery | legt die Sensoren automatisch in Home Assistant an |
 
 | Topic | Inhalt |
 |---|---|
 | `minigeiger/radiation_usvh` | Dosisleistung in µSv/h |
 | `minigeiger/cpm` | CPM, 1-Minuten-Fenster |
+| `minigeiger/cps` | CPS, ausschließlich Impulse der letzten Sekunde |
 | `minigeiger/count_total` | interne Gesamtzählung für die Historie |
 | `minigeiger/status` | `online` oder `offline` |
 
-MQTT und automatische Home-Assistant-Discovery werden in Einstellungen aktiviert.
+MQTT und automatische Home-Assistant-Discovery werden in Einstellungen aktiviert. Bei aktivierter Discovery erscheinen Dosisleistung, CPM, CPS und Verbindung automatisch als Geräteentitäten von **MiniGeigerCounter**. Alle Messwerte sowie der Verbindungsstatus sind retained, damit Home Assistant sofort nach einem Neustart einen gültigen Zustand erhält.
+
+## Update über das Webinterface
+
+In **Einstellungen → Programm-Update** prüft **Update prüfen** die veröffentlichte Version auf GitHub. Für **Update installieren** wird ein persönlicher Update-Code benötigt. Er wird beim normalen Speichern der Einstellungen erstmals gesetzt (mindestens 16 Zeichen) und danach aus Sicherheitsgründen nicht mehr angezeigt.
+
+Das Update führt ausschließlich einen Fast-Forward-Pull aus dem beim Installer verwendeten Git-Repository aus und startet anschließend den Dienst neu. Lokale, nicht committete Änderungen im Repository werden nicht überschrieben; dann wird das Update abgebrochen und in `/var/log/minigeiger-update.log` dokumentiert.
+
+Nach dem Upgrade auf v3.1 muss der Installer einmalig manuell ausgeführt werden, damit der geschützte Aktualisierer installiert wird:
+
+```bash
+cd ~/MiniGeigerCounter
+git pull origin main
+sudo bash install.sh
+```
+
+Ein automatisches Update bei jedem Raspberry-Pi-Start ist absichtlich nicht aktiviert. Messbetrieb und Kalibrierung bleiben damit auch dann verfügbar, wenn GitHub oder das Netzwerk gerade nicht erreichbar sind oder eine Version unerwartet Probleme verursacht.
 
 ## Wartung und Diagnose
 

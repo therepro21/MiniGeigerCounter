@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """MiniGeigerCounter - audio pulse acquisition, web UI and MQTT."""
-import asyncio, io, json, os, sqlite3, threading, time
+import asyncio, io, json, os, sqlite3, threading, time, subprocess, urllib.request
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,9 +24,11 @@ try:
 except ImportError:
     REPORTLAB_AVAILABLE=False
 
+APP_VERSION = "3.1.0"
+UPDATE_VERSION_URL = "https://raw.githubusercontent.com/therepro21/MiniGeigerCounter/main/VERSION"
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
-DEFAULT = {"counter_type":"sgp001_audio","audio_device":None,"sample_rate":44100,"gpio_pin":17,"gpio_active_low":True,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":True,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"127.0.0.1","mqtt_port":1883,"mqtt_username":"","mqtt_password":"","mqtt_topic":"minigeiger","home_assistant_discovery":True,"web_port":8734}
+DEFAULT = {"counter_type":"sgp001_audio","audio_device":None,"sample_rate":44100,"gpio_pin":17,"gpio_active_low":True,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":True,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"192.168.0.31","mqtt_port":1883,"mqtt_username":"minigeigercounter","mqtt_password":"","mqtt_topic":"minigeiger","mqtt_discovery_prefix":"homeassistant","home_assistant_discovery":True,"update_token":"","web_port":8734}
 RATE_PERIODS = (("1min", 60), ("5min", 300), ("15min", 900), ("1h", 3600), ("4h", 14400), ("12h", 43200), ("24h", 86400))
 def config():
     if not CONFIG_FILE.exists(): CONFIG_FILE.write_text(json.dumps(DEFAULT, indent=2))
@@ -160,14 +162,19 @@ class Monitor:
             if not self.mqtt:
                 self.mqtt=mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="minigeigercounter");
                 if c['mqtt_username']: self.mqtt.username_pw_set(c['mqtt_username'],c['mqtt_password'])
-                self.mqtt.will_set(c['mqtt_topic']+'/status','offline',retain=True); self.mqtt.connect_async(c['mqtt_host'],int(c['mqtt_port']),60); self.mqtt.loop_start()
+                self.mqtt.will_set(c['mqtt_topic'].rstrip('/')+'/status','offline',retain=True); self.mqtt.connect_async(c['mqtt_host'],int(c['mqtt_port']),60); self.mqtt.loop_start()
             base=c['mqtt_topic'].rstrip('/');
-            for k,v in [('radiation_usvh',s['usvh']),('cpm',s['cpm']),('count_total',s['total_count'])]: self.mqtt.publish(f'{base}/{k}',str(v),retain=True)
+            discovery_prefix=c.get('mqtt_discovery_prefix','homeassistant').strip('/') or 'homeassistant'
+            for k,v in [('radiation_usvh',s['usvh']),('cpm',s['cpm']),('cps',s['current_cps']),('count_total',s['total_count'])]: self.mqtt.publish(f'{base}/{k}',str(v),retain=True)
             self.mqtt.publish(f'{base}/status','online',retain=True)
             if c['home_assistant_discovery']:
-                for key,name,unit,cls in [('radiation_usvh','Radiation','µSv/h','measurement'),('cpm','Radiation CPM','CPM','measurement')]:
-                    payload={"name":name,"state_topic":f'{base}/{key}',"unique_id":f'minigeigercounter_{key}',"unit_of_measurement":unit,"state_class":cls,"device":{"identifiers":["minigeigercounter"],"name":"MiniGeigerCounter","model":"FTLab SGP001 audio"}}
-                    self.mqtt.publish(f'homeassistant/sensor/minigeigercounter_{key}/config',json.dumps(payload),retain=True)
+                sensors=[('radiation_usvh','Dosisleistung','sensor.minigeigercounter_dosisleistung','µSv/h','measurement','mdi:radioactive'),('cpm','Impulse pro Minute','sensor.minigeigercounter_cpm','CPM','measurement','mdi:counter'),('cps','Impulse pro Sekunde','sensor.minigeigercounter_cps','CPS','measurement','mdi:counter'),('count_total','Impulse gesamt','sensor.minigeigercounter_impulse_gesamt',None,'total_increasing','mdi:counter')]
+                for key,name,entity_id,unit,cls,icon in sensors:
+                    payload={"name":name,"default_entity_id":entity_id,"state_topic":f'{base}/{key}',"availability_topic":f'{base}/status',"payload_available":"online","payload_not_available":"offline","unique_id":f'minigeigercounter_{key}',"state_class":cls,"icon":icon,"device":{"identifiers":["minigeigercounter"],"name":"MiniGeigerCounter","manufacturer":"therepro21","model":"MiniGeigerCounter"}}
+                    if unit: payload["unit_of_measurement"]=unit
+                    self.mqtt.publish(f'{discovery_prefix}/sensor/minigeigercounter_{key}/config',json.dumps(payload),retain=True)
+                status={"name":"Verbindung","default_entity_id":"binary_sensor.minigeigercounter_verbindung","state_topic":f'{base}/status',"payload_on":"online","payload_off":"offline","device_class":"connectivity","unique_id":"minigeigercounter_status","device":{"identifiers":["minigeigercounter"],"name":"MiniGeigerCounter","manufacturer":"therepro21","model":"MiniGeigerCounter"}}
+                self.mqtt.publish(f'{discovery_prefix}/binary_sensor/minigeigercounter_status/config',json.dumps(status),retain=True)
         except Exception: pass
 
 monitor=Monitor()
@@ -190,7 +197,7 @@ async def worker():
 @asynccontextmanager
 async def lifespan(app):
     monitor.restart_input(); task=asyncio.create_task(worker()); yield; task.cancel(); monitor.flush_config(); monitor.stop_input()
-app=FastAPI(title='MiniGeigerCounter',version='3.0',lifespan=lifespan)
+app=FastAPI(title='MiniGeigerCounter',version=APP_VERSION,lifespan=lifespan)
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 @app.get('/')
 async def home(): return FileResponse(Path(__file__).parent/'static'/'index.html')
@@ -201,9 +208,17 @@ async def devices():
     return [{"id":i,"name":d['name']} for i,d in enumerate(sd.query_devices()) if d['max_input_channels']>0]
 @app.get('/api/config')
 async def get_config():
-    with monitor.lock: return dict(monitor.cfg)
+    with monitor.lock:
+        result=dict(monitor.cfg)
+        result['mqtt_password']=''
+        result['mqtt_has_password']=bool(monitor.cfg.get('mqtt_password'))
+        result['update_token']=''
+        result['update_has_token']=bool(monitor.cfg.get('update_token'))
+        return result
 @app.put('/api/config')
 async def put_config(update:dict):
+    if update.get('mqtt_password') in (None, ''): update.pop('mqtt_password', None)
+    if update.get('update_token') in (None, ''): update.pop('update_token', None)
     allowed=set(DEFAULT)
     with monitor.lock: old=dict(monitor.cfg)
     c={**old,**{k:v for k,v in update.items() if k in allowed}}
@@ -214,9 +229,34 @@ async def put_config(update:dict):
         except (TypeError, ValueError): raise HTTPException(422, 'Ungültige Impulsschwelle')
         if not 0 < c['threshold'] <= .01: raise HTTPException(422, 'Die Impulsschwelle muss zwischen 0 und 0,01 liegen')
     monitor.apply_config(c)
-    if any(old[k] != c[k] for k in ('mqtt_enabled','mqtt_host','mqtt_port','mqtt_username','mqtt_password','mqtt_topic','home_assistant_discovery')): monitor.mqtt=None
+    if c.get('update_token') and len(c['update_token']) < 16: raise HTTPException(422, 'Der Update-Code muss mindestens 16 Zeichen haben')
+    if any(old[k] != c[k] for k in ('mqtt_enabled','mqtt_host','mqtt_port','mqtt_username','mqtt_password','mqtt_topic','mqtt_discovery_prefix','home_assistant_discovery')): monitor.mqtt=None
     if any(old[k] != c[k] for k in ('counter_type','audio_device','sample_rate','gpio_pin','gpio_active_low')): monitor.restart_input()
     return {"ok":True}
+def _version_key(value):
+    return tuple(int(part) for part in value.strip().lstrip('v').split('.') if part.isdigit())
+@app.get('/api/update/check')
+async def update_check():
+    try:
+        with urllib.request.urlopen(UPDATE_VERSION_URL, timeout=5) as response:
+            latest=response.read(64).decode('utf-8').strip()
+        if not latest or not all(part.isdigit() for part in latest.lstrip('v').split('.')): raise ValueError('Ungültige Versionsdatei')
+        return {"current":APP_VERSION,"latest":latest,"available":_version_key(latest)>_version_key(APP_VERSION)}
+    except Exception as exc:
+        raise HTTPException(503, f'Updateprüfung nicht verfügbar: {exc}')
+@app.post('/api/update/install')
+async def update_install(payload:dict):
+    token=str(payload.get('token',''))
+    with monitor.lock: configured=str(monitor.cfg.get('update_token',''))
+    if not configured: raise HTTPException(409, 'Bitte zuerst einen Update-Code in den Einstellungen speichern.')
+    if token != configured: raise HTTPException(403, 'Update-Code ist nicht korrekt.')
+    updater=Path('/usr/local/sbin/minigeiger-update')
+    if not updater.exists(): raise HTTPException(409, 'Aktualisierer fehlt. Bitte den Installer einmal manuell ausführen.')
+    try:
+        subprocess.Popen(['sudo','-n',str(updater)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception as exc:
+        raise HTTPException(500, f'Update konnte nicht gestartet werden: {exc}')
+    return {"ok":True,"message":"Update gestartet. Der Dienst wird nach der Installation automatisch neu gestartet."}
 @app.get('/api/history')
 async def history(hours:int=24):
     hours=max(1,min(hours,24*90)); since=int(time.time()-hours*3600); bucket=60 if hours<=24 else 300 if hours<=24*7 else 900
@@ -247,7 +287,7 @@ async def export_pdf(hours:int=24):
         if y<65: page.showPage(); y=height-55; page.setFont('Helvetica',8)
         page.setFillColor(colors.HexColor('#102a43')); page.drawString(36,y,time.strftime('%d.%m.%Y %H:%M',time.localtime(ts)))
         page.drawRightString(235,y,f'{cpm:.2f}'.replace('.',',')); page.drawRightString(340,y,f'{usvh:.4f}'.replace('.',',')); page.drawRightString(470,y,str(total)); y-=12
-    page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,42,width-36,42); page.setFillColor(colors.HexColor('#526f82')); page.setFont('Helvetica',8); page.drawString(36,28,'Copyright by Michael P. Thiess - MiniGeigerCounter v3.0'); page.drawRightString(width-36,28,'github.com/therepro21/MiniGeigerCounter')
+    page.setStrokeColor(colors.HexColor('#d8e4ec')); page.line(36,42,width-36,42); page.setFillColor(colors.HexColor('#526f82')); page.setFont('Helvetica',8); page.drawString(36,28,f'Copyright by Michael P. Thiess - MiniGeigerCounter v{APP_VERSION}'); page.drawRightString(width-36,28,'github.com/therepro21/MiniGeigerCounter')
     page.save(); return Response(content=out.getvalue(),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="MiniGeigerCounter_{hours}h.pdf"'})
 @app.delete('/api/history')
 async def delete_history(hours:int=0):
