@@ -13,7 +13,7 @@ apt-get update
 # snd-usb-audio.  These packages provide ALSA device discovery, mixer profiles
 # and diagnostics; no vendor binary driver is installed.
 apt-get install -y python3 python3-venv python3-pip python3-gpiozero python3-lgpio portaudio19-dev libportaudio2 \
-  libasound2 alsa-utils alsa-ucm-conf usbutils kmod git sudo
+  libasound2 alsa-utils alsa-ucm-conf usbutils kmod git sudo ca-certificates
 modprobe snd-usb-audio || true
 install -d /etc/modules-load.d
 printf '%s\n' 'snd-usb-audio' > /etc/modules-load.d/minigeiger-usb-audio.conf

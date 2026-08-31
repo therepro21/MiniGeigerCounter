@@ -24,8 +24,11 @@ try:
 except ImportError:
     REPORTLAB_AVAILABLE=False
 
-APP_VERSION = "3.1.0"
-UPDATE_VERSION_URL = "https://raw.githubusercontent.com/therepro21/MiniGeigerCounter/main/VERSION"
+APP_VERSION = "3.1.1"
+UPDATE_VERSION_URLS = (
+    "https://raw.githubusercontent.com/therepro21/MiniGeigerCounter/main/VERSION",
+    "https://api.github.com/repos/therepro21/MiniGeigerCounter/tags?per_page=20",
+)
 DATA = Path(os.environ.get("MINIGEIGER_DATA", Path(__file__).parent / "data")); DATA.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE, DB_FILE = DATA / "config.json", DATA / "history.sqlite3"
 DEFAULT = {"counter_type":"sgp001_audio","audio_device":None,"sample_rate":44100,"gpio_pin":17,"gpio_active_low":True,"threshold":.0071,"holdoff_ms":80,"counts_per_usvh":8014.285714,"cps_per_usvh":133.571429,"click_sound_enabled":True,"history_retention_days":0,"mqtt_enabled":False,"mqtt_host":"192.168.0.31","mqtt_port":1883,"mqtt_username":"minigeigercounter","mqtt_password":"","mqtt_topic":"minigeiger","mqtt_discovery_prefix":"homeassistant","home_assistant_discovery":True,"update_token":"","web_port":8734}
@@ -235,15 +238,32 @@ async def put_config(update:dict):
     return {"ok":True}
 def _version_key(value):
     return tuple(int(part) for part in value.strip().lstrip('v').split('.') if part.isdigit())
+def _latest_version_from_github():
+    """Read the lightweight version file, with the tags API as a robust fallback."""
+    errors=[]
+    for url in UPDATE_VERSION_URLS:
+        try:
+            request=urllib.request.Request(url, headers={"User-Agent":"MiniGeigerCounter-update-check/3.1"})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                body=response.read(4096).decode('utf-8').strip()
+            if url.endswith('/VERSION'):
+                version=body
+            else:
+                tags=json.loads(body)
+                versions=[str(item.get('name','')) for item in tags if str(item.get('name','')).lstrip('v').replace('.','').isdigit()]
+                version=max(versions,key=_version_key) if versions else ''
+            if version and all(part.isdigit() for part in version.lstrip('v').split('.')): return version
+            errors.append('ungültige Antwort')
+        except Exception as exc:
+            errors.append(str(exc))
+    raise RuntimeError('; '.join(errors))
 @app.get('/api/update/check')
 async def update_check():
     try:
-        with urllib.request.urlopen(UPDATE_VERSION_URL, timeout=5) as response:
-            latest=response.read(64).decode('utf-8').strip()
-        if not latest or not all(part.isdigit() for part in latest.lstrip('v').split('.')): raise ValueError('Ungültige Versionsdatei')
+        latest=_latest_version_from_github()
         return {"current":APP_VERSION,"latest":latest,"available":_version_key(latest)>_version_key(APP_VERSION)}
     except Exception as exc:
-        raise HTTPException(503, f'Updateprüfung nicht verfügbar: {exc}')
+        raise HTTPException(503, f'GitHub nicht erreichbar: {exc}')
 @app.post('/api/update/install')
 async def update_install(payload:dict):
     token=str(payload.get('token',''))
