@@ -1,4 +1,4 @@
-# MiniGeigerCounter v3.1.1
+# MiniGeigerCounter v3.1.2
 
 [Deutsch](README.md) | [English](README.en.md)
 

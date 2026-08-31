@@ -47,7 +47,10 @@ visudo -cf /etc/sudoers.d/minigeiger-update
 systemctl unmask minigeiger.service || true
 install -m 644 minigeiger.service /etc/systemd/system/minigeiger.service
 systemctl daemon-reload
-systemctl enable --now minigeiger.service
+# `enable --now` does not restart an already active service. A real restart is
+# required after every installation so the running Python process loads app.py.
+systemctl enable minigeiger.service
+systemctl restart minigeiger.service
 echo "Fertig. Dashboard: http://$(hostname -I | awk '{print $1}'):8734"
 echo "Erkannte ALSA-Aufnahmegeräte:"
 arecord -l || true

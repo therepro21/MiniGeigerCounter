@@ -24,7 +24,7 @@ try:
 except ImportError:
     REPORTLAB_AVAILABLE=False
 
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 UPDATE_VERSION_URLS = (
     "https://raw.githubusercontent.com/therepro21/MiniGeigerCounter/main/VERSION",
     "https://api.github.com/repos/therepro21/MiniGeigerCounter/tags?per_page=20",
