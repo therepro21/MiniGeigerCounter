@@ -1,6 +1,12 @@
 # MiniGeigerCounter v3.1
 
+[Deutsch](README.md) | [English](README.en.md)
+
 Lokaler, ressourcenschonender Raspberry-Pi-Dienst für Geigerzähler. Das Dashboard, MQTT und Home-Assistant-Discovery funktionieren ohne Cloud und teilen sich den Pi konfliktarm mit anderen Diensten.
+
+![MiniGeigerCounter Dashboard – Beispielansicht ohne angeschlossenen Geigerzähler](docs/images/dashboard-no-geiger-device.png)
+
+> Beispielansicht ohne angeschlossenen Geigerzähler. Die dargestellten Messwerte dienen nur der Vorschau.
 
 Unterstützte Zählerprofile:
 
@@ -20,7 +26,7 @@ cd MiniGeigerCounter
 sudo bash install.sh
 ```
 
-Danach `http://PI-IP:8734` öffnen. Rechts oben **Einstellungen** wählen, Zählermodell und Eingangsart einstellen, speichern. Der Dienst läuft als Benutzer `minigeiger`; die GPIO-Berechtigung und `gpiozero` werden durch den Installer eingerichtet.
+Danach `http://PI-IP:8734` öffnen (**Webinterface-Port: 8734**). Rechts oben **Einstellungen** wählen, Zählermodell und Eingangsart einstellen, speichern. Der Dienst läuft als Benutzer `minigeiger`; die GPIO-Berechtigung und `gpiozero` werden durch den Installer eingerichtet. MQTT verwendet standardmäßig Port **1883**.
 
 ## Verdrahtung
 

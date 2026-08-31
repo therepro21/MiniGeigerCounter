@@ -3,6 +3,7 @@
   <path fill="#0866b6" d="M18 14a7 7 0 0 1 7-7h14a7 7 0 0 1 7 7v36a7 7 0 0 1-7 7H25a7 7 0 0 1-7-7V14Z"/>
   <path fill="#fff" d="M26 11h12v4H26zM23 22a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v13a4 4 0 0 1-4 4H27a4 4 0 0 1-4-4V22Zm3 7h3l2-5 3 10 2-5h5v-3h-3l-3 4-3-10-2 6h-2v3Z"/>
   <path fill="#fff" d="M25 45h14v3H25zM28 51h8v2h-8z"/>
-  <!-- Radiation arriving at the sensor: three clean, non-atomic wave fronts. -->
-  <path fill="#0866b6" d="M50 17c5 4 5 26 0 30l2 3c8-7 8-29 0-36l-2 3Zm6-5c11 10 11 30 0 40l2 3c13-11 13-35 0-46l-2 3Z"/>
+  <!-- Incoming radiation: wave fronts and arrow tips point towards the meter. -->
+  <path fill="none" stroke="#0866b6" stroke-width="3" stroke-linecap="round" d="M61 16C55 20 53 26 50 30M61 32H50M61 48C55 44 53 38 50 34"/>
+  <path fill="#0866b6" d="m52 26-5 4 6 1Zm0 2-5 4 6-1Zm0 5-5-1 5 4Z"/>
 </svg>
